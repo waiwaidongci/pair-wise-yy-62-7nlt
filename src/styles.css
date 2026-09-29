@@ -28,6 +28,19 @@ body { margin: 0; min-width: 320px; background: #eef2f0; }
 .metric-card { border: 1px solid var(--line); box-shadow: none !important; }
 .warning-banner { display: flex; align-items: center; gap: 9px; color: #8e5617; background: #fff7e7; border: 1px solid #ebcf9f; border-radius: 6px; padding: 11px 13px; margin-bottom: 14px; font-size: 12px; }
 .warning-banner span { color: #876f52; }
+.locked-banner { display: flex; align-items: center; gap: 9px; color: #176858; background: #eaf5f1; border: 1px solid #b7d9cf; border-radius: 6px; padding: 11px 13px; margin-bottom: 14px; font-size: 12px; }
+.locked-banner span { color: #33635a; }
+.locked-banner strong { color: #176858; }
+.empty-locked { border: 1px dashed #aabbB5; background: #fafcfb; box-shadow: none !important; }
+.locked-conclusion { border-color: #9fc4ba; background: #f3f9f7; box-shadow: none !important; }
+.locked-conclusion .panel-title { border-bottom-color: #d2e4df; }
+.conclusion-row { display: flex; align-items: flex-start; gap: 7px; padding: 6px 0; border-top: 1px solid #e3eeea; }
+.conclusion-row > div { min-width: 0; }
+.print-toolbar { border: 1px solid var(--line); box-shadow: none !important; }
+.print-meta { margin-top: 6px; font-size: 10px; }
+.print-suffix { font-size: 12px; color: var(--muted); font-weight: 400; }
+.draft-stamp { border-color: #aa7a2e; color: #aa7a2e; }
+.print-review { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 8px; }
 .overview-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
 .scene-card { overflow: hidden; border: 1px solid var(--line); box-shadow: none !important; }
 .panel-title { min-height: 57px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
@@ -133,7 +146,7 @@ body { margin: 0; min-width: 320px; background: #eef2f0; }
 }
 
 @media print {
-  .app-header, .app-nav, .page-heading, .mantine-AppShell-navbar, .mantine-AppShell-header { display: none !important; }
+  .app-header, .app-nav, .page-heading, .print-toolbar, .mantine-AppShell-navbar, .mantine-AppShell-header { display: none !important; }
   .page { padding: 0; max-width: none; }
   .print-sheet { border: 0; padding: 0 !important; }
 }
