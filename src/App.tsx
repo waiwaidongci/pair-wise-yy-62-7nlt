@@ -40,7 +40,6 @@ import {
   IconLayoutBoardSplit,
   IconLock,
   IconMap2,
-  IconPlayerPlay,
   IconPrinter,
   IconRefresh,
   IconRulerMeasure,
@@ -56,6 +55,10 @@ import {
   addComment,
   calculateStability,
   detectConflicts,
+  diffCargo,
+  findVersionView,
+  getLatestVersion,
+  listVersionViews,
   lockPlan,
   moveCargo,
   rejectComment,
@@ -63,7 +66,10 @@ import {
   setViewMode,
   store,
   updateLashing,
-  type RootState
+  versionLabel,
+  type ConflictIssue,
+  type RootState,
+  type VersionView
 } from './store';
 
 const nav = [
@@ -75,6 +81,41 @@ const nav = [
 
 function PageHeading({ eyebrow, title, description, actions }: { eyebrow: string; title: string; description: string; actions?: ReactNode }) {
   return <div className="page-heading"><div><small>{eyebrow}</small><h1>{title}</h1><p>{description}</p></div><Group gap="xs">{actions}</Group></div>;
+}
+
+/** 页头版本标识：始终同时标明当前草稿与最近锁定版本 */
+function VersionBadges({ planRevision, latest, size = 'sm' }: { planRevision: number; latest: VersionView | null; size?: 'xs' | 'sm' | 'md' | 'lg' }) {
+  return <>
+    <Badge size={size} variant="light" color="orange">草稿 V{planRevision}{latest ? ` · 基于锁定 V${latest.revision}` : ''}</Badge>
+    {latest && <Badge size={size} variant="light" color="teal" leftSection={<IconLock size={12} />}>最近锁定 V{latest.revision} · {latest.lockedAt}</Badge>}
+  </>;
+}
+
+/** 锁定后提示：当前工作区是新草稿，旧审阅结论只读 */
+function DraftNotice({ latest }: { latest: VersionView | null }) {
+  if (!latest) return null;
+  return <div className="info-banner"><IconLock size={16} /><strong>已进入锁定后的新草稿</strong><span>锁定 V{latest.revision} 的货位、冲突、条件接受与船长/码头/货主意见已定格只读；拖货、改绑扎或处理意见只作用于当前草稿，不影响旧版本。</span></div>;
+}
+
+/** 按主甲板 B4–B10 / R0–R3 的 28 槽位生成占用图，标出两个版本间变化的货位 */
+function deckSlotMap(cargo: VersionView['cargo']) {
+  const map = new Map<number, VersionView['cargo'][number]>();
+  cargo.forEach((item) => {
+    if (item.deck !== '主甲板') return;
+    const bayIndex = item.bay - 4;
+    if (bayIndex < 0 || bayIndex > 6 || item.row < 0 || item.row > 3) return;
+    map.set(bayIndex * 4 + item.row, item);
+  });
+  return map;
+}
+
+function MiniDeck({ view, changedSlots, tone }: { view: VersionView; changedSlots: Set<number>; tone: 'old' | 'new' }) {
+  const slots = deckSlotMap(view.cargo);
+  return <div className={`mini-deck ${tone}-deck`}>{Array.from({ length: 28 }).map((_, index) => {
+    const item = slots.get(index);
+    const changed = changedSlots.has(index);
+    return <div key={index} className={changed ? 'changed' : ''} style={item && !changed ? { background: item.color } : undefined} title={item ? `${item.bill} · ${item.weight}t` : `B${4 + Math.floor(index / 4)}/R${index % 4}`}>{item?.bill.slice(-3) ?? ''}</div>;
+  })}</div>;
 }
 
 function ThreeHold({ compact = false }: { compact?: boolean }) {
@@ -223,9 +264,12 @@ function Overview() {
   const dispatch = useDispatch();
   const stability = calculateStability(state.cargo);
   const conflicts = detectConflicts(state.cargo);
+  const hasBlocking = conflicts.some((item) => item.level === 'high');
+  const latest = getLatestVersion(state);
   const active = state.cargo.find((item) => item.id === state.activeCargoId) ?? state.cargo[0];
   return <div className="page">
-    <PageHeading eyebrow={`${data?.id ?? 'V-2609-17'} / 航次审阅`} title="多用途船舶配载校核" description={`${data?.vessel ?? '海岳轮'} · ${data?.route ?? '上海 → 釜山 → 温哥华'} · 计划离港 ${data?.departure ?? '10-02 14:00'}`} actions={<><Button variant="default" leftSection={<IconRefresh size={16} />} onClick={() => dispatch(setViewMode(state.viewMode === '3d' ? 'section' : '3d'))}>{state.viewMode === '3d' ? '二维剖面' : '三维视角'}</Button><Button color="teal" leftSection={<IconLock size={16} />} disabled={conflicts.length > 0 || state.locked} onClick={() => dispatch(lockPlan())}>{state.locked ? '方案已锁定' : '锁定配载版本'}</Button></>} />
+    <PageHeading eyebrow={`${data?.id ?? 'V-2609-17'} / 航次审阅`} title="多用途船舶配载校核" description={`${data?.vessel ?? '海岳轮'} · ${data?.route ?? '上海 → 釜山 → 温哥华'} · 计划离港 ${data?.departure ?? '10-02 14:00'}`} actions={<><VersionBadges planRevision={state.planRevision} latest={latest} /><Button variant="default" leftSection={<IconRefresh size={16} />} onClick={() => dispatch(setViewMode(state.viewMode === '3d' ? 'section' : '3d'))}>{state.viewMode === '3d' ? '二维剖面' : '三维视角'}</Button><Button color="teal" leftSection={<IconLock size={16} />} disabled={hasBlocking} onClick={() => dispatch(lockPlan())}>{hasBlocking ? '存在阻断冲突，无法锁定' : `形成审阅结论 V${state.planRevision}`}</Button></>} />
+    {latest && <DraftNotice latest={latest} />}
     {conflicts.length > 0 && <div className="warning-banner"><IconAlertTriangle size={18} /><strong>{conflicts.length} 项配载冲突待处理</strong><span>{conflicts.map((item) => item.title).join('、')}</span></div>}
     <SimpleGrid cols={{ base: 2, lg: 4 }} spacing="sm" mb="md">{[
       ['总货重', `${stability.total.toFixed(1)} t`, '设计上限 3560 t', 'ok'],
@@ -234,7 +278,7 @@ function Overview() {
       ['主甲板载荷', `${stability.deckLoad.toFixed(1)} t`, '局部强度已校核', 'ok']
     ].map((item) => <Card key={item[0]} padding="md" className="metric-card"><Text size="xs" c="dimmed">{item[0]}</Text><Text fw={800} fz={23} mt={3}>{item[1]}</Text><Text size="xs" c={item[3] === 'bad' ? 'red' : 'teal'}>{item[2]}</Text></Card>)}</SimpleGrid>
     <div className="overview-grid">
-      <Card padding={0} className="scene-card"><div className="panel-title"><div><strong>{state.viewMode === '3d' ? '三维货位与航次分布' : '舱内横向剖面'}</strong><Text size="xs" c="dimmed">货箱颜色对应目的港与货类</Text></div><Badge color="teal" variant="light">方案 V{state.planRevision}</Badge></div>{state.viewMode === '3d' ? <ThreeHold /> : <SectionView />}</Card>
+      <Card padding={0} className="scene-card"><div className="panel-title"><div><strong>{state.viewMode === '3d' ? '三维货位与航次分布' : '舱内横向剖面'}</strong><Text size="xs" c="dimmed">货箱颜色对应目的港与货类</Text></div><Badge color="orange" variant="light">草稿 V{state.planRevision}</Badge></div>{state.viewMode === '3d' ? <ThreeHold /> : <SectionView />}</Card>
       <Stack gap="sm">
         <Card padding="md"><div className="panel-title"><div><strong>当前货位</strong><Text size="xs" c="dimmed">{active.id}</Text></div><Badge color={active.hazmat !== '无' ? 'orange' : 'gray'}>{active.hazmat === '无' ? '普通货' : '危险品'}</Badge></div><Stack gap={6} mt="sm"><Text fw={700}>{active.bill} · {active.type}</Text><Text size="xs" c="dimmed">{active.dimension}</Text><SimpleGrid cols={2} spacing="xs"><div className="mini-stat"><span>重量</span><strong>{active.weight} t</strong></div><div className="mini-stat"><span>卸货港</span><strong>{active.port}</strong></div><div className="mini-stat"><span>货位</span><strong>Bay {active.bay} / Row {active.row} / Tier {active.tier}</strong></div><div className="mini-stat"><span>绑扎</span><strong>{active.lashing}</strong></div></SimpleGrid></Stack></Card>
         <Card padding="md"><div className="panel-title"><div><strong>重量分布</strong><Text size="xs" c="dimmed">按横向货位统计</Text></div><IconRulerMeasure size={18} /></div><div className="weight-bars">{[2, 4, 6, 8, 10, 12, 14].map((bay) => { const weight = state.cargo.filter((item) => item.bay === bay).reduce((sum, item) => sum + item.weight, 0); return <div key={bay}><span>{weight.toFixed(0)}t</span><i style={{ height: `${Math.max(8, weight / 1.2)}px` }} /><small>B{bay}</small></div>; })}</div></Card>
@@ -258,7 +302,8 @@ function Stowage() {
   useEffect(() => { setBay(active.bay); setRow(active.row); setTier(active.tier); }, [active.bay, active.row, active.tier]);
   const slots = useMemo(() => Array.from({ length: 28 }).map((_, index) => ({ id: `slot-${index}`, bay: 4 + Math.floor(index / 4), row: index % 4, tier: 0, label: `B${4 + Math.floor(index / 4)} R${index % 4}` })), []);
   return <div className="page">
-    <PageHeading eyebrow={`配载工作区 / 方案 V${state.planRevision}`} title="货位安排与冲突校核" description="拖动货箱排序，或输入目标货位精确调整；系统即时重算重量分布。" actions={<Badge size="lg" color={conflicts.length ? 'orange' : 'teal'} leftSection={<IconCheck size={14} />}>{conflicts.length ? `${conflicts.length} 项冲突` : '校验通过'}</Badge>} />
+    <PageHeading eyebrow={`配载工作区 / 草稿 V${state.planRevision}`} title="货位安排与冲突校核" description="拖动货箱排序，或输入目标货位精确调整；系统即时重算重量分布。" actions={<><VersionBadges planRevision={state.planRevision} latest={getLatestVersion(state)} /><Badge size="lg" color={conflicts.length ? 'orange' : 'teal'} leftSection={<IconCheck size={14} />}>{conflicts.length ? `${conflicts.length} 项冲突` : '校验通过'}</Badge></>} />
+    {getLatestVersion(state) && <DraftNotice latest={getLatestVersion(state)} />}
     <div className="stowage-grid">
       <Card padding={0} className="cargo-list-panel"><div className="panel-title"><div><strong>货物清单</strong><Text size="xs" c="dimmed">{state.cargo.length} 票 · 可拖拽</Text></div><TextInput size="xs" placeholder="搜索提单号" /></div><ScrollArea h={600}><div className="cargo-list">{state.cargo.map((item) => <button draggable onDragStart={() => setDragId(item.id)} key={item.id} className={state.activeCargoId === item.id ? 'active' : ''} onClick={() => dispatch(selectCargo(item.id))}><i style={{ background: item.color }} /><div><strong>{item.bill}</strong><span>{item.type} · {item.weight}t · {item.port}</span></div><Badge size="xs" color={item.hazmat === '无' ? 'gray' : 'orange'}>{item.hazmat === '无' ? `B${item.bay}` : 'DG'}</Badge></button>)}</div></ScrollArea></Card>
       <Card padding={0} className="deck-panel"><div className="panel-title"><div><strong>主甲板货位图</strong><Text size="xs" c="dimmed">将货物拖入槽位，或点击槽位选择</Text></div><Group gap="xs"><Badge color="teal">稳性 {stability.stability.toFixed(1)}%</Badge><Badge color="gray">{stability.trim}</Badge></Group></div><div className="deck-layout"><div className="bridge-shape">驾驶台</div><div className="slot-grid">{slots.map((slot) => { const occupied = state.cargo.find((item) => item.deck === '主甲板' && item.bay === slot.bay && item.row === slot.row); return <button key={slot.id} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (dragId) dispatch(moveCargo({ id: dragId, bay: slot.bay, row: slot.row, tier: occupied?.tier ?? 1 })); setDragId(null); }} className={occupied ? 'occupied' : ''} style={occupied ? { background: occupied.color } : undefined} onClick={() => { if (occupied) { dispatch(selectCargo(occupied.id)); setRow(slot.row); setBay(slot.bay); } }}><small>{slot.label}</small>{occupied && <strong>{occupied.bill.slice(-3)}<span>{occupied.weight}t</span></strong>}</button>; })}</div><div className="deck-axis">左舷 ← 横向 Row → 右舷</div></div></Card>
@@ -271,39 +316,135 @@ function Stowage() {
   </div>;
 }
 
+function ChangeKindBadge({ kind }: { kind: string }) {
+  const map: Record<string, { color: string; label: string }> = {
+    moved: { color: 'blue', label: '移动货位' },
+    modified: { color: 'orange', label: '属性变更' },
+    added: { color: 'teal', label: '新加入' },
+    removed: { color: 'red', label: '已移除' }
+  };
+  const meta = map[kind] ?? map.modified;
+  return <Badge size="xs" color={meta.color} variant="light">{meta.label}</Badge>;
+}
+
+function FrozenOpinions({ view }: { view: VersionView }) {
+  const pending = view.comments.filter((item) => item.status === '待确认').length;
+  return <Card padding="md">
+    <div className="panel-title" style={{ padding: 0, borderBottom: 0 }}><div><strong>{versionLabel(view)} · 审阅意见快照（只读）</strong><Text size="xs" c="dimmed">{view.lockedAt ?? '当前工作草稿'} · {pending} 项待确认</Text></div><IconUsers size={18} /></div>
+    <div className="frozen-opinions">{view.comments.map((item) => <div className="limit-row" key={item.id}><div><Text size="xs" fw={700}>{item.author} · {item.role}</Text><Text size="xs" c="dimmed">{item.content}</Text></div><Badge size="xs" color={item.status === '待确认' ? 'orange' : item.status === '已接受' ? 'teal' : 'red'}>{item.status}</Badge></div>)}</div>
+    {view.acceptedLimits.length > 0 && <div className="accepted-limits"><Text size="xs" fw={700} mt="xs">条件接受（{view.acceptedLimits.length}）</Text>{view.acceptedLimits.map((limit) => <Text key={limit} size="xs" c="teal" className="limit-line"><IconCheck size={11} />{limit}</Text>)}</div>}
+  </Card>;
+}
+
+function ConflictSnapshot({ title, conflicts }: { title: string; conflicts: ConflictIssue[] }) {
+  return <Card padding="md">
+    <div className="panel-title" style={{ padding: 0, borderBottom: 0 }}><div><strong>{title}</strong><Text size="xs" c="dimmed">{conflicts.length ? `定格时存在 ${conflicts.length} 项冲突` : '定格时无冲突'}</Text></div><IconAlertTriangle size={18} /></div>
+    {conflicts.map((item) => <div className="limit-row" key={item.id}><div><Text size="xs" fw={700}>{item.title}</Text><Text size="xs" c="dimmed">{item.detail}</Text></div><Badge size="xs" color={item.level === 'high' ? 'red' : 'orange'}>{item.level === 'high' ? '阻断' : '预警'}</Badge></div>)}
+    {!conflicts.length && <Text size="xs" c="teal" mt="xs">形成审阅结论时校验通过。</Text>}
+  </Card>;
+}
+
 function Compare() {
   const state = useSelector((root: RootState) => root.stowage);
-  const stability = calculateStability(state.cargo);
-  const changed = state.cargo.filter((item) => item.id === 'BL-88247' || item.id === 'BL-88219' || item.id === 'BL-88240');
-  const [acceptOpen, setAcceptOpen] = useState(false);
   const dispatch = useDispatch();
+  const views = listVersionViews(state);
+  const latest = getLatestVersion(state);
+  const draft = views[views.length - 1];
+  const [baselineId, setBaselineId] = useState<string | null>(null);
+  const [acceptOpen, setAcceptOpen] = useState(false);
+
+  // 默认基线：最近锁定版本；还没有锁定版本时使用系统初始基线
+  const baselineIdResolved = baselineId ?? (latest ? latest.id : views[0].id);
+  const baseline = findVersionView(state, baselineIdResolved);
+  const changes = useMemo(() => diffCargo(baseline.cargo, draft.cargo), [baseline, draft]);
+  const blockingCount = draft.conflicts.filter((item) => item.level === 'high').length;
+
+  // 槽位占用变化（含装/卸货位）
+  const changedSlots = useMemo(() => {
+    const before = deckSlotMap(baseline.cargo);
+    const after = deckSlotMap(draft.cargo);
+    const slots = new Set<number>();
+    for (let index = 0; index < 28; index += 1) {
+      const oldItem = before.get(index)?.id;
+      const newItem = after.get(index)?.id;
+      if (oldItem !== newItem) slots.add(index);
+    }
+    return slots;
+  }, [baseline, draft]);
+
+  const oldStability = calculateStability(baseline.cargo);
+  const newStability = calculateStability(draft.cargo);
+
   return <div className="page">
-    <PageHeading eyebrow="PLAN BASELINE / V4 → V5" title="配载方案对比" description="按货位、重量分布和受限条件比较两个版本，并逐项决定是否接受。" actions={<Button color="teal" leftSection={<IconCheck size={16} />} onClick={() => setAcceptOpen(true)}>形成审阅结论</Button>} />
-    <div className="compare-summary"><div><span>当前版本</span><strong>V{state.planRevision}</strong><small>总重 {stability.total.toFixed(1)}t</small></div><span className="compare-arrow">→</span><div><span>被比较版本</span><strong>V4</strong><small>总重 {(stability.total + 5.2).toFixed(1)}t</small></div><Badge color="teal" variant="light">3 处货位变化</Badge></div>
-    <div className="compare-grid"><Card padding={0}><div className="panel-title"><div><strong>V4 基线</strong><Text size="xs" c="dimmed">批准于 09-28 16:20</Text></div></div><div className="mini-deck old-deck">{Array.from({ length: 28 }).map((_, index) => <div key={index} className={index === 6 || index === 11 || index === 17 ? 'changed' : ''}>{index === 6 ? '219' : index === 11 ? '240' : index === 17 ? '247' : ''}</div>)}</div></Card><Card padding={0}><div className="panel-title"><div><strong>V5 候选</strong><Text size="xs" c="dimmed">当前编辑 · {state.draftSavedAt}</Text></div></div><div className="mini-deck new-deck">{Array.from({ length: 28 }).map((_, index) => <div key={index} className={index === 6 || index === 11 || index === 17 ? 'changed' : ''}>{index === 6 ? '219' : index === 11 ? '240' : index === 17 ? '247' : ''}</div>)}</div></Card></div>
-    <Card padding="md" mt="md"><div className="panel-title"><div><strong>参数差异</strong><Text size="xs" c="dimmed">系统通过检查的差异可直接接受</Text></div><Badge>{changed.length} 项</Badge></div><Table verticalSpacing="sm"><Table.Thead><Table.Tr><Table.Th>货物</Table.Th><Table.Th>字段</Table.Th><Table.Th>V4</Table.Th><Table.Th>V5</Table.Th><Table.Th>说明</Table.Th><Table.Th>决定</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{[
-      ['BL-88247', '货位', 'Bay 14 / Row 1', 'Bay 15 / Row 0', '扩大重大件绑扎操作空间'],
-      ['BL-88219', '绑扎', '待绑扎', '需复核', '危险品隔离边界调整'],
-      ['BL-88240', 'Tier', 'Tier 1', 'Tier 2', '降低舱内底层局部载荷']
-    ].map((row) => <Table.Tr key={row[0]}><Table.Td>{row[0]}</Table.Td><Table.Td>{row[1]}</Table.Td><Table.Td><Text c="red" td="line-through">{row[2]}</Text></Table.Td><Table.Td><Text c="teal" fw={700}>{row[3]}</Text></Table.Td><Table.Td><Text size="xs">{row[4]}</Text></Table.Td><Table.Td><Checkbox label="接受" defaultChecked /></Table.Td></Table.Tr>)}</Table.Tbody></Table></Card>
-    <Modal opened={acceptOpen} onClose={() => setAcceptOpen(false)} title="形成配载审阅结论" centered><Stack><Text size="sm" c="dimmed">接受后生成新的只读版本并保留船长、码头和货主意见。锁定前仍可退回修改。</Text>{['重大件绑扎后由甲板部复核', '危险品隔离线在配载图中明确标注', '釜山卸货顺序不得改变'].map((limit) => <Checkbox key={limit} label={limit} checked={state.acceptedLimits.includes(limit)} onChange={() => dispatch(acceptLimit(limit))} />)}<Button color="teal" disabled={state.acceptedLimits.length < 3} onClick={() => { dispatch(lockPlan()); setAcceptOpen(false); }}>接受并锁定 V{state.planRevision + 1}</Button></Stack></Modal>
+    <PageHeading eyebrow={`PLAN COMPARE / ${versionLabel(baseline)} → 草稿 V${state.planRevision}`} title="配载方案对比" description="选择一个只读版本作为基线，查看当前草稿相对旧版本改了哪些货；旧版本的冲突、条件接受与意见不会随后续调整变化。" actions={<><Select size="xs" w={210} value={baseline.id} onChange={(value) => value && setBaselineId(value)} data={views.slice(0, -1).map((item) => ({ value: item.id, label: `${versionLabel(item)}${item.lockedAt ? ` · ${item.lockedAt}` : ''}` }))} aria-label="选择基线版本" /><Button color="teal" leftSection={<IconCheck size={16} />} onClick={() => setAcceptOpen(true)}>形成审阅结论</Button></>} />
+    {latest && <DraftNotice latest={latest} />}
+    <div className="compare-summary">
+      <div><span>基线版本（只读）</span><strong>{versionLabel(baseline)}</strong><small>总重 {oldStability.total.toFixed(1)}t · 稳性 {oldStability.stability.toFixed(1)}%</small></div>
+      <span className="compare-arrow">→</span>
+      <div><span>当前草稿</span><strong>V{state.planRevision}</strong><small>总重 {newStability.total.toFixed(1)}t · 稳性 {newStability.stability.toFixed(1)}% · {state.draftSavedAt}</small></div>
+      <Badge color={changes.length ? 'teal' : 'gray'} variant="light">{changes.length} 项货物变化</Badge>
+      {baseline.kind === 'baseline' && <Text size="xs" c="dimmed">尚无锁定版本，使用系统初始基线；在下方“形成审阅结论”后即生成首个只读版本。</Text>}
+    </div>
+    <div className="compare-grid">
+      <Card padding={0}><div className="panel-title"><div><strong>{versionLabel(baseline)}</strong><Text size="xs" c="dimmed">{baseline.lockedAt ?? baseline.lockedBy}</Text></div><Badge variant="light" color="teal">只读</Badge></div><MiniDeck view={baseline} changedSlots={changedSlots} tone="old" /></Card>
+      <Card padding={0}><div className="panel-title"><div><strong>草稿 V{state.planRevision}（候选）</strong><Text size="xs" c="dimmed">当前编辑 · {state.draftSavedAt} 自动保存</Text></div><Badge variant="light" color="orange">草稿</Badge></div><MiniDeck view={draft} changedSlots={changedSlots} tone="new" /></Card>
+    </div>
+    <Card padding="md" mt="md">
+      <div className="panel-title" style={{ padding: 0, borderBottom: 0, marginBottom: 10 }}><div><strong>货物差异</strong><Text size="xs" c="dimmed">新草稿相对基线改动的货：货位移动、绑扎/重量/危险品/卸货港变更、新加与移除</Text></div><Badge color={changes.length ? 'teal' : 'gray'}>{changes.length} 项</Badge></div>
+      <Table verticalSpacing="sm">
+        <Table.Thead><Table.Tr><Table.Th>提单</Table.Th><Table.Th>类型</Table.Th><Table.Th>字段</Table.Th><Table.Th>{versionLabel(baseline)}</Table.Th><Table.Th>草稿 V{state.planRevision}</Table.Th></Table.Tr></Table.Thead>
+        <Table.Tbody>{changes.map((change, index) => <Table.Tr key={`${change.cargoId}-${change.field}-${index}`}><Table.Td fw={700}>{change.bill}<Text size="xs" c="dimmed" component="div">{change.cargoId}</Text></Table.Td><Table.Td><ChangeKindBadge kind={change.kind} /></Table.Td><Table.Td>{change.field}</Table.Td><Table.Td><Text c="red" td={change.kind === 'moved' ? 'line-through' : undefined}>{change.before}</Text></Table.Td><Table.Td><Text c="teal" fw={700}>{change.after}</Text></Table.Td></Table.Tr>)}</Table.Tbody>
+      </Table>
+      {!changes.length && <Text size="sm" c="dimmed" ta="center" py="md">草稿与基线完全一致，没有货物变化。</Text>}
+    </Card>
+    <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md" mt="md">
+      <FrozenOpinions view={baseline} />
+      <ConflictSnapshot title={`${versionLabel(baseline)} · 冲突快照（只读）`} conflicts={baseline.conflicts} />
+    </SimpleGrid>
+    <Modal opened={acceptOpen} onClose={() => setAcceptOpen(false)} title={`形成配载审阅结论 · V${state.planRevision}`} centered size="lg">
+      <Stack gap="sm">
+        <Text size="sm" c="dimmed">锁定后当前草稿将定格为只读版本 V{state.planRevision}：保留当时的货位、冲突、条件接受与船长/码头/货主意见；随后拖货、改绑扎或处理意见进入新草稿 V{state.planRevision + 1}，旧版本不再变化。</Text>
+        {blockingCount > 0 && <div className="warning-banner"><IconAlertTriangle size={16} /><span>当前草稿存在 {blockingCount} 项阻断级冲突，处理前无法锁定。</span></div>}
+        <div><Text fw={700} size="sm">随结论定格的货物变化（相对{versionLabel(baseline)}，{changes.length} 项）</Text>{changes.slice(0, 5).map((change, index) => <Text key={index} size="xs" c="dimmed" className="limit-line"><ChangeKindBadge kind={change.kind} />{change.bill} · {change.field}：{change.before} → {change.after}</Text>)}{changes.length > 5 && <Text size="xs" c="dimmed">其余 {changes.length - 5} 项见上方差异表。</Text>}</div>
+        <Divider />
+        <Text fw={700} size="sm">条件接受</Text>
+        {['重大件绑扎后由甲板部复核', '危险品隔离线在配载图中明确标注', '釜山卸货顺序不得改变'].map((limit) => <Checkbox key={limit} label={limit} checked={state.acceptedLimits.includes(limit)} onChange={() => dispatch(acceptLimit(limit))} />)}
+        <Group justify="flex-end"><Button variant="default" onClick={() => setAcceptOpen(false)}>退回修改</Button><Button color="teal" leftSection={<IconLock size={15} />} disabled={blockingCount > 0 || state.acceptedLimits.length < 3} onClick={() => { dispatch(lockPlan()); setBaselineId(null); setAcceptOpen(false); }}>接受并锁定 V{state.planRevision}</Button></Group>
+      </Stack>
+    </Modal>
   </div>;
 }
 
 function PrintPlan() {
   const { data } = useGetVoyageQuery();
   const state = useSelector((root: RootState) => root.stowage);
-  const stability = calculateStability(state.cargo);
-  const dispatch = useDispatch();
+  const views = listVersionViews(state);
+  const latest = getLatestVersion(state);
+  // 默认打印最近锁定版本；没有锁定版本时打印当前草稿
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedIdResolved = selectedId ?? (latest ? latest.id : 'draft');
+  const view = findVersionView(state, selectedIdResolved);
+  const stability = calculateStability(view.cargo);
+  const isDraft = view.kind === 'draft';
+  const sortedCargo = useMemo(() => [...view.cargo].sort((a, b) => (a.port === '釜山' ? -1 : 1) - (b.port === '釜山' ? -1 : 1)), [view.cargo]);
   return <div className="page print-page">
-    <PageHeading eyebrow="STOWAGE PLAN / PRINT" title="配载图与卸货清单" description="面向船长、码头和理货人员打印，包含重量分布和危险品标记。" actions={<><Button variant="default" leftSection={<IconPlayerPlay size={16} />} onClick={() => dispatch(setViewMode(state.viewMode === '3d' ? 'section' : '3d'))}>预览剖面</Button><Button color="teal" leftSection={<IconPrinter size={16} />} onClick={() => window.print()}>打印配载包</Button></>} />
+    <PageHeading eyebrow="STOWAGE PLAN / PRINT" title="配载图与卸货清单" description="选择草稿或任一已锁定的只读版本打印；页头标明当前草稿与最近锁定版本。" actions={<><Select size="xs" w={260} value={view.id} onChange={(value) => value && setSelectedId(value)} data={[...views.slice(0, -1).map((item) => ({ value: item.id, label: `${versionLabel(item)}${item.lockedAt ? ` · ${item.lockedAt}` : ''}` })), { value: 'draft', label: `当前草稿 V${state.planRevision} · ${state.draftSavedAt}` }]} aria-label="选择打印版本" /><Button color="teal" leftSection={<IconPrinter size={16} />} onClick={() => window.print()}>打印此版本</Button></>} />
+    {isDraft
+      ? <div className="info-banner print-hide"><IconFileDescription size={16} /><strong>正在打印未锁定草稿 V{state.planRevision}</strong><span>{latest ? `最近锁定版本为 V${latest.revision}（${latest.lockedAt}）。正式配载包建议先在对比页“形成审阅结论”。` : '尚无锁定版本，当前内容为工作草稿。'}</span></div>
+      : <div className="info-banner locked print-hide"><IconLock size={16} /><strong>正在打印只读{versionLabel(view)}</strong><span>定格于 {view.lockedAt} · {view.lockedBy}；货位、冲突、条件接受与意见均为当时记录，不随后续草稿变化。</span></div>}
     <Card padding="xl" className="print-sheet">
-      <div className="print-header"><div><Text size="xs" c="dimmed">VESSEL STOWAGE PLAN</Text><h1>{data?.vessel ?? '海岳轮'} · {data?.id ?? 'V-2609-17'}</h1><p>{data?.route}</p></div><div className="print-stamp">方案 V{state.planRevision}<br />已校核</div></div>
+      <div className="print-header"><div><Text size="xs" c="dimmed">VESSEL STOWAGE PLAN</Text><h1>{data?.vessel ?? '海岳轮'} · {data?.id ?? 'V-2609-17'}</h1><p>{data?.route}</p><div className="print-versionline">打印版本：<strong>{versionLabel(view)}</strong>{view.lockedAt ? ` · ${view.lockedAt}` : ` · 草稿自动保存 ${state.draftSavedAt}`}{latest && <>　|　当前草稿：<strong>V{state.planRevision}</strong>　最近锁定版本：<strong>V{latest.revision}</strong></>}</div></div><div className={`print-stamp ${isDraft ? 'draft-stamp' : ''}`}>{isDraft ? `草稿 V${state.planRevision}` : `锁定 V${view.revision}`}<br />{isDraft ? '未锁定 · 仅供校核' : '审阅结论 · 只读'}</div></div>
       <div className="print-kpis"><div><span>总货重</span><strong>{stability.total.toFixed(1)} t</strong></div><div><span>稳性裕度</span><strong>{stability.stability.toFixed(1)}%</strong></div><div><span>纵倾</span><strong>{stability.trim}</strong></div><div><span>主甲板载荷</span><strong>{stability.deckLoad.toFixed(1)} t</strong></div></div>
       <h3>主甲板配载图</h3>
-      <div className="print-deck">{Array.from({ length: 28 }).map((_, index) => { const row = index % 4; const bay = 4 + Math.floor(index / 4); const item = state.cargo.find((cargo) => cargo.deck === '主甲板' && cargo.bay === bay && cargo.row === row); return <div key={index} className={item ? 'filled' : ''} style={item ? { borderTopColor: item.color } : undefined}><span>{item ? item.bill.slice(-3) : ''}</span><small>{item ? `${item.weight}t` : `B${bay}/R${row}`}</small>{item?.hazmat !== '无' && item && <b>DG</b>}</div>; })}</div>
+      <div className="print-deck">{Array.from({ length: 28 }).map((_, index) => { const row = index % 4; const bay = 4 + Math.floor(index / 4); const item = view.cargo.find((cargo) => cargo.deck === '主甲板' && cargo.bay === bay && cargo.row === row); return <div key={index} className={item ? 'filled' : ''} style={item ? { borderTopColor: item.color } : undefined}><span>{item ? item.bill.slice(-3) : ''}</span><small>{item ? `${item.weight}t` : `B${bay}/R${row}`}</small>{item?.hazmat !== '无' && item && <b>DG</b>}</div>; })}</div>
       <h3>卸货顺序与绑扎清单</h3>
-      <Table striped><Table.Thead><Table.Tr><Table.Th>顺序</Table.Th><Table.Th>提单号</Table.Th><Table.Th>货位</Table.Th><Table.Th>货类</Table.Th><Table.Th>重量</Table.Th><Table.Th>卸货港</Table.Th><Table.Th>危险品 / 绑扎</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{[...state.cargo].sort((a, b) => (a.port === '釜山' ? -1 : 1) - (b.port === '釜山' ? -1 : 1)).map((item, index) => <Table.Tr key={item.id}><Table.Td>{index + 1}</Table.Td><Table.Td fw={700}>{item.bill}</Table.Td><Table.Td>B{item.bay}/R{item.row}/T{item.tier}</Table.Td><Table.Td>{item.type}</Table.Td><Table.Td>{item.weight} t</Table.Td><Table.Td>{item.port}</Table.Td><Table.Td><Badge size="xs" color={item.hazmat !== '无' ? 'orange' : 'gray'}>{item.hazmat}</Badge> <Text span size="xs">{item.lashing}</Text></Table.Td></Table.Tr>)}</Table.Tbody></Table>
+      <Table striped><Table.Thead><Table.Tr><Table.Th>顺序</Table.Th><Table.Th>提单号</Table.Th><Table.Th>货位</Table.Th><Table.Th>货类</Table.Th><Table.Th>重量</Table.Th><Table.Th>卸货港</Table.Th><Table.Th>危险品 / 绑扎</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{sortedCargo.map((item, index) => <Table.Tr key={item.id}><Table.Td>{index + 1}</Table.Td><Table.Td fw={700}>{item.bill}</Table.Td><Table.Td>B{item.bay}/R{item.row}/T{item.tier}</Table.Td><Table.Td>{item.type}</Table.Td><Table.Td>{item.weight} t</Table.Td><Table.Td>{item.port}</Table.Td><Table.Td><Badge size="xs" color={item.hazmat !== '无' ? 'orange' : 'gray'}>{item.hazmat}</Badge> <Text span size="xs">{item.lashing}</Text></Table.Td></Table.Tr>)}</Table.Tbody></Table>
+      <div className="print-appendix">
+        <h3>审阅意见与条件接受{isDraft ? '（当前草稿）' : `（锁定 V${view.revision} 时定格）`}</h3>
+        <Table striped><Table.Thead><Table.Tr><Table.Th>角色</Table.Th><Table.Th>提出人</Table.Th><Table.Th>意见 / 条件</Table.Th><Table.Th>状态</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{view.comments.map((item) => <Table.Tr key={item.id}><Table.Td><Badge size="xs">{item.role}</Badge></Table.Td><Table.Td>{item.author}</Table.Td><Table.Td>{item.content}</Table.Td><Table.Td>{item.status}</Table.Td></Table.Tr>)}</Table.Tbody></Table>
+        {view.acceptedLimits.length > 0 && <ul className="print-limits">{view.acceptedLimits.map((limit) => <li key={limit}>{limit}</li>)}</ul>}
+        {view.conflicts.length > 0 && <div className="print-conflicts"><strong>定格时冲突记录（{view.conflicts.length}）：</strong>{view.conflicts.map((item) => <span key={item.id} className={item.level === 'high' ? 'high' : 'medium'}>[{item.level === 'high' ? '阻断' : '预警'}] {item.title}：{item.detail}</span>)}</div>}
+      </div>
       <div className="print-signatures"><div>配载负责人：____________</div><div>船长确认：____________</div><div>码头代表：____________</div><div>日期：2026-09-29</div></div>
     </Card>
   </div>;
@@ -312,9 +453,10 @@ function PrintPlan() {
 function Shell({ children }: { children: ReactNode }) {
   const state = useSelector((root: RootState) => root.stowage);
   const stability = calculateStability(state.cargo);
+  const latest = getLatestVersion(state);
   return <AppShell header={{ height: 62 }} navbar={{ width: 224, breakpoint: 'sm' }} padding={0}>
-    <AppShellHeader className="app-header"><Group h="100%" px="md" justify="space-between"><Group gap="sm"><ThemeIcon color="teal" variant="light"><IconShip size={19} /></ThemeIcon><div className="brand-copy"><strong>船舶配载校核台</strong><span>Stowage & Voyage Review</span></div></Group><Group gap="sm" visibleFrom="sm"><Badge variant="light" color="teal">海岳轮</Badge><Text size="xs" c="dimmed">V-2609-17 · 方案 V{state.planRevision}</Text><Badge color={state.locked ? 'teal' : 'orange'}>{state.locked ? '已锁定' : '审阅中'}</Badge></Group><ActionIcon variant="subtle" color="gray"><IconAnchor size={18} /></ActionIcon></Group></AppShellHeader>
-    <AppShellNavbar p="xs" className="app-nav"><div className="voyage-card"><Text size="xs" c="dimmed">当前航次</Text><Text fw={800}>上海 → 温哥华</Text><Text size="xs" c="dimmed">经停釜山 · 10-02 离港</Text><Progress value={stability.stability} color={stability.stability > 70 ? 'teal' : 'orange'} size="sm" mt="sm" /><Text size="xs" mt={4}>稳性裕度 {stability.stability.toFixed(1)}%</Text></div>{nav.map((item) => <NavLink end={item.path === '/'} key={item.path} to={item.path}>{item.icon}<span>{item.label}</span></NavLink>)}<div className="nav-foot"><IconRoute size={16} /><Text size="xs">基线：方案 V4<br />草稿：{state.draftSavedAt} 自动保存</Text></div></AppShellNavbar>
+    <AppShellHeader className="app-header"><Group h="100%" px="md" justify="space-between"><Group gap="sm"><ThemeIcon color="teal" variant="light"><IconShip size={19} /></ThemeIcon><div className="brand-copy"><strong>船舶配载校核台</strong><span>Stowage & Voyage Review</span></div></Group><Group gap="sm" visibleFrom="sm"><Badge variant="light" color="teal">海岳轮</Badge><Badge variant="light" color="orange">草稿 V{state.planRevision}</Badge>{latest && <Badge variant="light" color="teal" leftSection={<IconLock size={11} />}>最近锁定 V{latest.revision}</Badge>}{!latest && <Badge color="orange" variant="light">尚未锁定</Badge>}</Group><ActionIcon variant="subtle" color="gray"><IconAnchor size={18} /></ActionIcon></Group></AppShellHeader>
+    <AppShellNavbar p="xs" className="app-nav"><div className="voyage-card"><Text size="xs" c="dimmed">当前航次</Text><Text fw={800}>上海 → 温哥华</Text><Text size="xs" c="dimmed">经停釜山 · 10-02 离港</Text><Progress value={stability.stability} color={stability.stability > 70 ? 'teal' : 'orange'} size="sm" mt="sm" /><Text size="xs" mt={4}>稳性裕度 {stability.stability.toFixed(1)}%</Text></div>{nav.map((item) => <NavLink end={item.path === '/'} key={item.path} to={item.path}>{item.icon}<span>{item.label}</span></NavLink>)}<div className="nav-foot"><IconRoute size={16} /><Text size="xs">{latest ? `最近锁定：V${latest.revision}（只读）` : '尚无锁定版本 · 可从初始基线对比'}<br />草稿：V{state.planRevision} · {state.draftSavedAt} 自动保存</Text></div></AppShellNavbar>
     <AppShellMain>{children}</AppShellMain>
   </AppShell>;
 }

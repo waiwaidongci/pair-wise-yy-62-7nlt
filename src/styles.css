@@ -28,6 +28,20 @@ body { margin: 0; min-width: 320px; background: #eef2f0; }
 .metric-card { border: 1px solid var(--line); box-shadow: none !important; }
 .warning-banner { display: flex; align-items: center; gap: 9px; color: #8e5617; background: #fff7e7; border: 1px solid #ebcf9f; border-radius: 6px; padding: 11px 13px; margin-bottom: 14px; font-size: 12px; }
 .warning-banner span { color: #876f52; }
+.info-banner { display: flex; align-items: center; gap: 9px; color: #1d5146; background: #e9f5f1; border: 1px solid #b7d9cf; border-radius: 6px; padding: 11px 13px; margin-bottom: 14px; font-size: 12px; }
+.info-banner.locked { background: #eef3fb; border-color: #b9cce6; color: #23406b; }
+.info-banner span { color: #5a7068; }
+.info-banner.locked span { color: #576985; }
+.limit-line { display: flex; align-items: center; gap: 5px; margin-top: 3px; }
+.frozen-opinions .limit-row, .accepted-limits { padding-left: 0; }
+.print-versionline { margin-top: 8px; font-size: 11px; color: var(--muted); }
+.print-versionline strong { color: #17332c; }
+.draft-stamp { border-color: #b06a22; color: #b06a22; }
+.print-appendix { margin-top: 24px; }
+.print-limits { margin: 8px 0 0; padding-left: 18px; font-size: 11px; line-height: 1.8; }
+.print-conflicts { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; font-size: 10px; }
+.print-conflicts span.high { color: var(--red); }
+.print-conflicts span.medium { color: var(--amber); }
 .overview-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
 .scene-card { overflow: hidden; border: 1px solid var(--line); box-shadow: none !important; }
 .panel-title { min-height: 57px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
@@ -133,7 +147,8 @@ body { margin: 0; min-width: 320px; background: #eef2f0; }
 }
 
 @media print {
-  .app-header, .app-nav, .page-heading, .mantine-AppShell-navbar, .mantine-AppShell-header { display: none !important; }
+  .app-header, .app-nav, .page-heading, .print-hide, .mantine-AppShell-navbar, .mantine-AppShell-header { display: none !important; }
   .page { padding: 0; max-width: none; }
   .print-sheet { border: 0; padding: 0 !important; }
+  .info-banner { display: none !important; }
 }
